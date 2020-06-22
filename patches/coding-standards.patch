@@ -1,0 +1,1685 @@
+diff --git a/auditfiles.services.yml b/auditfiles.services.yml
+index 027d167..c2f0773 100644
+--- a/auditfiles.services.yml
++++ b/auditfiles.services.yml
+@@ -1,11 +1,11 @@
+ services:
+   auditfiles.not_in_database:
+     class: Drupal\auditfiles\ServiceAuditFilesNotInDatabase
+-    arguments: ['@string_translation', '@config.factory', '@database', '@stream_wrapper_manager']
++    arguments: ['@string_translation', '@config.factory', '@database', '@stream_wrapper_manager', '@file_sysgtem', '@current_user', '@file.mime_type.guesser', '@datetime.time', '@uuid']
+ 
+   auditfiles.not_on_server:
+     class: Drupal\auditfiles\ServiceAuditFilesNotOnServer
+-    arguments: ['@string_translation', '@config.factory', '@database', '@date.formatter']
++    arguments: ['@string_translation', '@config.factory', '@database', '@date.formatter', '@file_system']
+ 
+   auditfiles.managed_not_used:
+     class: Drupal\auditfiles\ServiceAuditFilesManagedNotUsed
+@@ -21,8 +21,8 @@ services:
+ 
+   auditfiles.referenced_not_used:
+     class: Drupal\auditfiles\ServiceAuditFilesReferencedNotUsed
+-    arguments: ['@string_translation', '@config.factory', '@database', '@entity_field.manager']
++    arguments: ['@string_translation', '@config.factory', '@database', '@entity_field.manager', '@entity_type.manager', '@file.usage']
+ 
+   auditfiles.merge_file_references:
+     class: Drupal\auditfiles\ServiceAuditFilesMergeFileReferences
+-    arguments: ['@string_translation', '@config.factory', '@database']
++    arguments: ['@string_translation', '@config.factory', '@database', '@entity_type.manager']
+diff --git a/src/Form/AuditFilesConfig.php b/src/Form/AuditFilesConfig.php
+index 3c86057..c786907 100644
+--- a/src/Form/AuditFilesConfig.php
++++ b/src/Form/AuditFilesConfig.php
+@@ -6,12 +6,39 @@ use Drupal\Core\Form\ConfigFormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Datetime\Entity\DateFormat;
+ use Drupal\Core\StreamWrapper\StreamWrapperInterface;
++use Symfony\Component\DependencyInjection\ContainerInterface;
+ 
+ /**
+  * Use this class to create configuration form for module.
+  */
+ class AuditFilesConfig extends ConfigFormBase {
+ 
++  /**
++   * The Stream Wrapper Manager service.
++   *
++   * @var \Drupal\Core\StreamWrapperInterface
++   */
++  protected $streamWrapperManager;
++
++  /**
++   * Class constructor.
++   *
++   * @param Drupal\Core\StreamWrapperInterface\StreamWrapperInterface $stream_wrapper
++   *   The stream wrapper service.
++   */
++  public function __construct(StreamWrapperInterface $stream_wrapper) {
++    $this->streamWrapperManager = $stream_wrapper;
++  }
++
++  /**
++   * {@inheritdoc}
++   */
++  public static function create(ContainerInterface $container) {
++    return new static(
++      $container->get('stream_wrapper_manager'),
++    );
++  }
++
+   /**
+    * Widget Id.
+    */
+@@ -37,7 +64,7 @@ class AuditFilesConfig extends ConfigFormBase {
+       '#collapsible' => TRUE,
+     ];
+     // Show the file system path select list.
+-    $file_system_paths = \Drupal::service("stream_wrapper_manager")->getWrappers(StreamWrapperInterface::LOCAL);
++    $file_system_paths = $this->streamWrapperManager->getWrappers(StreamWrapperInterface::LOCAL);
+     $options = [];
+     foreach ($file_system_paths as $file_system_path_id => $file_system_path) {
+       $options[$file_system_path_id] = $file_system_path_id . ' : file_' . $file_system_path_id . '_path';
+diff --git a/src/Form/AuditFilesManagedNotUsed.php b/src/Form/AuditFilesManagedNotUsed.php
+index 6528af1..717af58 100644
+--- a/src/Form/AuditFilesManagedNotUsed.php
++++ b/src/Form/AuditFilesManagedNotUsed.php
+@@ -7,11 +7,12 @@ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+-use Drupal\file\Entity\File;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesManagedNotUsed;
++use Drupal\Core\Pager\PagerManagerInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ 
+ /**
+  * Form for Managed not used functionality.
+@@ -28,10 +29,43 @@ class AuditFilesManagedNotUsed extends FormBase implements ConfirmFormInterface
+   protected $configFactoryStorage;
+ 
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The auditfiles.managed_not_used service.
++   *
++   * @var Drupal\auditfiles\ServiceAuditFilesManagedNotUsed
++   */
++  protected $filesManagedNotUsed;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
++   */
++  protected $pagerManager;
++
++  /**
++   * The entity_type.manager service.
++   *
++   * @var Drupal\Core\Entity\EntityTypeManagerInterface
++   */
++  protected $entityTypeManager;
++
++  /**
++   * Class constructor.
++   *
++   * @param Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   The configuration service.
++   * @param Drupal\auditfiles\ServiceAuditFilesManagedNotUsed $files_managed_not_used
++   *   The auditfiles.managed_not_used service.
++   * @param Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   The pager.manager service.
++   * @param Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   *   The entity_type.manager service.
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesManagedNotUsed $files_managed_not_used, PagerManagerInterface $pager_manager, EntityTypeManagerInterface $entity_type_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->filesManagedNotUsed = $files_managed_not_used;
++    $this->pagerManager = $pager_manager;
++    $this->entityTypeManager = $entity_type_manager;
+   }
+ 
+   /**
+@@ -39,7 +73,10 @@ class AuditFilesManagedNotUsed extends FormBase implements ConfirmFormInterface
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+-      $container->get('config.factory')
++      $container->get('config.factory'),
++      $container->get('auditfiles.managed_not_used'),
++      $container->get('pager.manager'),
++      $container->get('entity_type.manager')
+     );
+   }
+ 
+@@ -108,7 +145,7 @@ class AuditFilesManagedNotUsed extends FormBase implements ConfirmFormInterface
+       if (!empty($values)) {
+         foreach ($values as $file_id) {
+           if (!empty($file_id)) {
+-            $file = File::load($file_id);
++            $file = $this->entityTypeManager->getStorage('file')->load($file_id);
+             if (!empty($file)) {
+               $form['changelist'][$file_id] = [
+                 '#type' => 'hidden',
+@@ -141,18 +178,18 @@ class AuditFilesManagedNotUsed extends FormBase implements ConfirmFormInterface
+       return $form;
+     }
+     $config = $this->configFactoryStorage->get('auditfiles.settings');
+-    $file_ids = \Drupal::service('auditfiles.managed_not_used')->auditfilesManagedNotUsedGetFileList();
++    $file_ids = $this->filesManagedNotUsed->auditfilesManagedNotUsedGetFileList();
+     if (!empty($file_ids)) {
+       $date_format = $config->get('auditfiles_report_options_date_format') ? $config->get('auditfiles_report_options_date_format') : 'long';
+       foreach ($file_ids as $file_id) {
+-        $rows[$file_id] = \Drupal::service('auditfiles.managed_not_used')->auditfilesManagedNotUsedGetFileData($file_id, $date_format);
++        $rows[$file_id] = $this->filesManagedNotUsed->auditfilesManagedNotUsedGetFileData($file_id, $date_format);
+       }
+     }
+     if (!empty($rows)) {
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+ 
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+     }
+@@ -173,7 +210,7 @@ class AuditFilesManagedNotUsed extends FormBase implements ConfirmFormInterface
+     // Create the form table.
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.managed_not_used')->auditfilesManagedNotUsedGetHeader(),
++      '#header' => $this->filesManagedNotUsed->auditfilesManagedNotUsedGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -234,7 +271,7 @@ class AuditFilesManagedNotUsed extends FormBase implements ConfirmFormInterface
+    * Submit form confirm delete record.
+    */
+   public function confirmSubmissionHandlerFileDelete(array &$form, FormStateInterface $form_state) {
+-    batch_set(\Drupal::service('auditfiles.managed_not_used')->auditfilesManagedNotUsedBatchDeleteCreateBatch($form_state->getValue('changelist')));
++    batch_set($this->filesManagedNotUsed->auditfilesManagedNotUsedBatchDeleteCreateBatch($form_state->getValue('changelist')));
+   }
+ 
+ }
+diff --git a/src/Form/AuditFilesMergeFileReferences.php b/src/Form/AuditFilesMergeFileReferences.php
+index f0be6d4..49aecc9 100644
+--- a/src/Form/AuditFilesMergeFileReferences.php
++++ b/src/Form/AuditFilesMergeFileReferences.php
+@@ -9,9 +9,10 @@ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+ use Drupal\Core\Database\Database;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesMergeFileReferences;
++use Drupal\Core\Pager\PagerManagerInterface;
+ 
+ /**
+  * Form for merge file references.
+@@ -24,14 +25,39 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+    * The Config.
+    *
+    * @var \Drupal\Core\Config\ConfigFactoryInterface
++   *   Configuration service.
+    */
+   protected $configFactoryStorage;
+ 
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The auditfiles.merge_file_references service.
++   *
++   * @var Drupal\auditfiles\ServiceAuditFilesMergeFileReferences
++   *   auditfiles.merge_file_references service.
++   */
++  protected $filesMergeFileReferences;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  protected $pagerManager;
++
++  /**
++   * Class Constructor.
++   *
++   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   Configuration service.
++   * @param Drupal\auditfiles\ServiceAuditFilesMergeFileReferences $service_auditfiles_merge_file_references
++   *   The auditfiles.merge_file_references service.
++   * @param Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   Pager Manager service.
++   */
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesMergeFileReferences $service_auditfiles_merge_file_references, PagerManagerInterface $pager_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->filesMergeFileReferences = $service_auditfiles_merge_file_references;
++    $this->pagerManager = $pager_manager;
+   }
+ 
+   /**
+@@ -40,7 +66,9 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+   public static function create(ContainerInterface $container) {
+     return new static(
+       $container->get('config.factory'),
+-      $container->get('date.formatter')
++      $container->get('date.formatter'),
++      $container->get('auditfiles.merge_file_references'),
++      $container->get('pager.manager')
+     );
+   }
+ 
+@@ -144,8 +172,7 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+                 'fileid' => $file_id,
+                 'fileuri' => $file->uri,
+                 'filesize' => number_format($file->filesize),
+-                'timestamp' => $this->dateFormatter->format($file->created, $date_format)
+-
++                'timestamp' => $this->dateFormatter->format($file->created, $date_format),
+               ];
+             }
+             else {
+@@ -266,18 +293,18 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+         return $form;
+       }
+     }
+-    $file_names = \Drupal::service('auditfiles.merge_file_references')->auditfilesMergeFileReferencesGetFileList();
++    $file_names = $this->filesMergeFileReferences->auditfilesMergeFileReferencesGetFileList();
+     if (!empty($file_names)) {
+       $date_format = $config->get('auditfiles_report_options_date_format') ? $config->get('auditfiles_report_options_date_format') : 'long';
+       foreach ($file_names as $file_name) {
+-        $rows[$file_name] = \Drupal::service('auditfiles.merge_file_references')->auditfilesMergeFileReferencesGetFileData($file_name, $date_format);
++        $rows[$file_name] = $this->filesMergeFileReferences->auditfilesMergeFileReferencesGetFileData($file_name, $date_format);
+       }
+     }
+     // Set up the pager.
+     if (!empty($rows)) {
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         // Break the total data set into page sized chunks.
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+@@ -304,7 +331,7 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+     ];
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.merge_file_references')->auditfilesMergeFileReferencesGetHeader(),
++      '#header' => $this->filesMergeFileReferences->auditfilesMergeFileReferencesGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -359,7 +386,7 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+    * Submit form.
+    */
+   public function submissionHandlerMergeRecord(array &$form, FormStateInterface $form_state) {
+-    \Drupal::configFactory()->getEditable('auditfiles.settings')
++    $this->configFactoryStorage->getEditable('auditfiles.settings')
+       ->set('auditfiles_merge_file_references_show_single_file_names', $form_state->getValue('auditfiles_merge_file_references_show_single_file_names'))->save();
+     if (!empty($form_state->getValue('files'))) {
+       foreach ($form_state->getValue('files') as $file_id) {
+@@ -405,7 +432,7 @@ class AuditFilesMergeFileReferences extends FormBase implements ConfirmFormInter
+    */
+   public function confirmSubmissionHandlerFileMerge(array &$form, FormStateInterface $form_state) {
+     $storage = $form_state->getStorage();
+-    batch_set(\Drupal::service('auditfiles.merge_file_references')->auditfilesMergeFileReferencesBatchMergeCreateBatch($form_state->getValue('file_being_kept'), $storage['files_being_merged']));
++    batch_set($this->filesMergeFileReferences->auditfilesMergeFileReferencesBatchMergeCreateBatch($form_state->getValue('file_being_kept'), $storage['files_being_merged']));
+     unset($storage['stage']);
+   }
+ 
+diff --git a/src/Form/AuditFilesNotInDatabase.php b/src/Form/AuditFilesNotInDatabase.php
+index dfddc14..718ba18 100644
+--- a/src/Form/AuditFilesNotInDatabase.php
++++ b/src/Form/AuditFilesNotInDatabase.php
+@@ -8,9 +8,10 @@ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesNotInDatabase;
++use Drupal\Core\Pager\PagerManagerInterface;
+ 
+ /**
+  * Form for Not in database functionality.
+@@ -27,10 +28,33 @@ class AuditFilesNotInDatabase extends FormBase implements ConfirmFormInterface {
+   protected $configFactoryStorage;
+ 
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The auditfiles.not_in_database service.
++   *
++   * @var \Drupal\auditfiles\ServiceAuditFilesNotInDatabase
++   */
++  protected $auditFilesNotInDatabase;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
++   */
++  protected $pagerManager;
++
++  /**
++   * The constructor.
++   *
++   * @param Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   The config factory storage service.
++   * @param Drupal\auditfiles\ServiceAuditFilesNotInDatabase $audit_files_nid
++   *   The auditfiles.not_in_database service.
++   * @param Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   The pager.manager service.
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesNotInDatabase $audit_files_nid, PagerManagerInterface $pager_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->auditFilesNotInDatabase = $audit_files_nid;
++    $this->pagerManager = $pager_manager;
+   }
+ 
+   /**
+@@ -38,7 +62,9 @@ class AuditFilesNotInDatabase extends FormBase implements ConfirmFormInterface {
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+-      $container->get('config.factory')
++      $container->get('config.factory'),
++      $container->get('auditfiles.not_in_database'),
++      $container->get('pager.manager')
+     );
+   }
+ 
+@@ -151,12 +177,12 @@ class AuditFilesNotInDatabase extends FormBase implements ConfirmFormInterface {
+     $config = $this->configFactoryStorage->get('auditfiles.settings');
+     // Get the records to display.
+     // Check to see if there is saved data, and if so, use that.
+-    $rows = \Drupal::service('auditfiles.not_in_database')->auditfilesNotInDatabaseGetReportsFiles();
++    $rows = $this->auditFilesNotInDatabase->auditfilesNotInDatabaseGetReportsFiles();
+     if (!empty($rows)) {
+       // Set up the pager.
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         // Break the total data set into page sized chunks.
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+@@ -180,7 +206,7 @@ class AuditFilesNotInDatabase extends FormBase implements ConfirmFormInterface {
+     // Create the form table.
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.not_in_database')->auditfilesNotInDatabaseGetHeader(),
++      '#header' => $this->auditFilesNotInDatabase->auditfilesNotInDatabaseGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -278,10 +304,10 @@ class AuditFilesNotInDatabase extends FormBase implements ConfirmFormInterface {
+   public function confirmSubmissionHandler(array &$form, FormStateInterface $form_state) {
+     $storage = &$form_state->getStorage();
+     if ($storage['op'] == 'add') {
+-      batch_set(\Drupal::service('auditfiles.not_in_database')->auditfilesNotInDatabaseBatchAddCreateBatch($form_state->getValue('changelist')));
++      batch_set($this->auditFilesNotInDatabase->auditfilesNotInDatabaseBatchAddCreateBatch($form_state->getValue('changelist')));
+     }
+     else {
+-      batch_set(\Drupal::service('auditfiles.not_in_database')->auditfilesNotInDatabaseBatchDeleteCreateBatch($form_state->getValue('changelist')));
++      batch_set($this->auditFilesNotInDatabase->auditfilesNotInDatabaseBatchDeleteCreateBatch($form_state->getValue('changelist')));
+     }
+   }
+ 
+diff --git a/src/Form/AuditFilesNotOnServer.php b/src/Form/AuditFilesNotOnServer.php
+index 0e3106f..4a29494 100644
+--- a/src/Form/AuditFilesNotOnServer.php
++++ b/src/Form/AuditFilesNotOnServer.php
+@@ -7,11 +7,12 @@ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+-use Drupal\file\Entity\File;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesNotOnServer;
++use Drupal\Core\Pager\PagerManagerInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ 
+ /**
+  * Form for File not on server functionality.
+@@ -28,10 +29,43 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+   protected $configFactoryStorage;
+ 
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The auditfiles.not_on_server service.
++   *
++   * @var \Drupal\auditfiles\ServiceAuditFilesNotOnServer
++   */
++  protected $auditFilesNotOnServer;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
++   */
++  protected $pagerManager;
++
++  /**
++   * The entity_type.manager service.
++   *
++   * @var Drupal\Core\Entity\EntityTypeManagerInterface
++   */
++  protected $entityTypeManager;
++
++  /**
++   * Class Constructor.
++   *
++   * @param Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   Configuration service.
++   * @param Drupal\auditfiles\ServiceAuditFilesNotOnServer $audit_files_nos
++   *   The auditfiles.not_on_server service.
++   * @param Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   Pager Manager service.
++   * @param Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   *   Entity Type Manager service.
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesNotOnServer $audit_files_nos, PagerManagerInterface $pager_manager, EntityTypeManagerInterface $entity_type_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->auditFilesNotOnServer = $audit_files_nos;
++    $this->pagerManager = $pager_manager;
++    $this->entityTypeManager = $entity_type_manager;
+   }
+ 
+   /**
+@@ -39,7 +73,10 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+-      $container->get('config.factory')
++      $container->get('config.factory'),
++      $container->get('auditfiles.not_on_server'),
++      $container->get('pager.manager'),
++      $container->get('entity_type.manager')
+     );
+   }
+ 
+@@ -109,7 +146,7 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+       if (!empty($values)) {
+         foreach ($values as $file_id) {
+           if (!empty($file_id)) {
+-            $file = File::load($file_id);
++            $file = $this->entityTypeManager->getStorage('file')->load($file_id);
+             if (!empty($file)) {
+               $form['changelist'][$file_id] = [
+                 '#type' => 'hidden',
+@@ -145,11 +182,11 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+       }
+       return $form;
+     }
+-    $file_ids = \Drupal::service('auditfiles.not_on_server')->auditfilesNotOnServerGetFileList();
++    $file_ids = $this->auditFilesNotOnServer->auditfilesNotOnServerGetFileList();
+     if (!empty($file_ids)) {
+       $date_format = $config->get('auditfiles_report_options_date_format') ? $config->get('auditfiles_report_options_date_format') : 'long';
+       foreach ($file_ids as $file_id) {
+-        $row = \Drupal::service('auditfiles.not_on_server')->auditfilesNotOnServerGetFileData($file_id, $date_format);
++        $row = $this->auditFilesNotOnServer->auditfilesNotOnServerGetFileData($file_id, $date_format);
+         if (isset($row)) {
+           $rows[$file_id] = $row;
+         }
+@@ -159,7 +196,7 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+     if (!empty($rows)) {
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         // Break the total data set into page sized chunks.
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+@@ -182,7 +219,7 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+     // Create the form table.
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.not_on_server')->auditfilesNotOnServerGetHeader(),
++      '#header' => $this->auditFilesNotOnServer->auditfilesNotOnServerGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -244,7 +281,7 @@ class AuditFilesNotOnServer extends FormBase implements ConfirmFormInterface {
+    * Delete record from database confirm.
+    */
+   public function confirmSubmissionHandlerDelete(array &$form, FormStateInterface $form_state) {
+-    batch_set(\Drupal::service('auditfiles.not_on_server')->auditfilesNotOnServerBatchDeleteCeateBatch($form_state->getValue('changelist')));
++    batch_set($this->auditFilesNotOnServer->auditfilesNotOnServerBatchDeleteCreateBatch($form_state->getValue('changelist')));
+   }
+ 
+ }
+diff --git a/src/Form/AuditFilesReferencedNotUsed.php b/src/Form/AuditFilesReferencedNotUsed.php
+index 40659fc..2dcb300 100644
+--- a/src/Form/AuditFilesReferencedNotUsed.php
++++ b/src/Form/AuditFilesReferencedNotUsed.php
+@@ -8,9 +8,10 @@ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesReferencedNotUsed;
++use Drupal\Core\Pager\PagerManagerInterface;
+ 
+ /**
+  * Form for Files referenced not used functionality.
+@@ -27,10 +28,33 @@ class AuditFilesReferencedNotUsed extends FormBase implements ConfirmFormInterfa
+   protected $configFactoryStorage;
+ 
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The auditfiles.referenced_not_used service.
++   *
++   * @var Drupal\auditfiles\ServiceAuditFilesReferencedNotUsed
++   */
++  protected $filesReferencedNotUsed;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
++   */
++  protected $pagerManager;
++
++  /**
++   * Class Constructor.
++   *
++   * @param \Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   The configuration service.
++   * @param \Drupal\auditfiles\ServiceAuditFilesReferencedNotUsed $files_referenced_not_used
++   *   The auditfiles.referenced_not_used service.
++   * @param \Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   The pager.manager service.
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesReferencedNotUsed $files_referenced_not_used, PagerManagerInterface $pager_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->filesReferencedNotUsed = $files_referenced_not_used;
++    $this->pagerManager = $pager_manager;
+   }
+ 
+   /**
+@@ -38,7 +62,9 @@ class AuditFilesReferencedNotUsed extends FormBase implements ConfirmFormInterfa
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+-      $container->get('config.factory')
++      $container->get('config.factory'),
++      $container->gert('auditfiles.referenced_not_used'),
++      $container->get('pager.manager')
+     );
+   }
+ 
+@@ -147,16 +173,16 @@ class AuditFilesReferencedNotUsed extends FormBase implements ConfirmFormInterfa
+       }
+       return $form;
+     }
+-    $file_data = \Drupal::service('auditfiles.referenced_not_used')->auditfilesReferencedNotUsedGetFileList();
++    $file_data = $this->filesReferencedNotUsed->auditfilesReferencedNotUsedGetFileList();
+     if (!empty($file_data)) {
+       foreach ($file_data as $reference_id => $row_data) {
+-        $rows[$reference_id] = \Drupal::service('auditfiles.referenced_not_used')->auditfilesReferencedNotUsedGetFileData($row_data);
++        $rows[$reference_id] = $this->filesReferencedNotUsed->auditfilesReferencedNotUsedGetFileData($row_data);
+       }
+     }
+     if (!empty($rows)) {
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+     }
+@@ -175,7 +201,7 @@ class AuditFilesReferencedNotUsed extends FormBase implements ConfirmFormInterfa
+     }
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.referenced_not_used')->auditfilesReferencedNotUsedGetHeader(),
++      '#header' => $this->filesReferencedNotUsed->auditfilesReferencedNotUsedGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -271,10 +297,10 @@ class AuditFilesReferencedNotUsed extends FormBase implements ConfirmFormInterfa
+   public function confirmSubmissionHandler(array &$form, FormStateInterface $form_state) {
+     $storage = &$form_state->getStorage();
+     if ($storage['op'] == 'add') {
+-      batch_set(\Drupal::service('auditfiles.referenced_not_used')->auditfilesReferencedNotUsedBatchAddCreateBatch($form_state->getValue('changelist')));
++      batch_set($this->filesReferencedNotUsed->auditfilesReferencedNotUsedBatchAddCreateBatch($form_state->getValue('changelist')));
+     }
+     else {
+-      batch_set(\Drupal::service('auditfiles.referenced_not_used')->auditfilesReferencedNotUsedBatchDeleteCreateBatch($form_state->getValue('changelist')));
++      batch_set($this->filesReferencedNotUsed->auditfilesReferencedNotUsedBatchDeleteCreateBatch($form_state->getValue('changelist')));
+     }
+   }
+ 
+diff --git a/src/Form/AuditFilesUsedNotManaged.php b/src/Form/AuditFilesUsedNotManaged.php
+index ac36f1c..85f0c66 100644
+--- a/src/Form/AuditFilesUsedNotManaged.php
++++ b/src/Form/AuditFilesUsedNotManaged.php
+@@ -8,9 +8,10 @@ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesUsedNotManaged;
++use Drupal\Core\Pager\PagerManagerInterface;
+ 
+ /**
+  * Class for file used but not managed.
+@@ -27,10 +28,33 @@ class AuditFilesUsedNotManaged extends FormBase implements ConfirmFormInterface
+   protected $configFactoryStorage;
+ 
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The auditfiles.managed_not_used service.
++   *
++   * @var Drupal\auditfiles\ServiceAuditFilesUsedNotManaged
++   */
++  protected $filesUsedNotManaged;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
++   */
++  protected $pagerManager;
++
++  /**
++   * Class constructor.
++   *
++   * @param Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   The configuration service.
++   * @param Drupal\auditfiles\ServiceAuditFilesUsedNotManaged $files_used_not_managed
++   *   The auditfiles.used_not_managed service.
++   * @param Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   The pager.manager service.
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesUsedNotManaged $files_used_not_managed, PagerManagerInterface $pager_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->filesUsedNotManaged = $files_used_not_managed;
++    $this->pagerManager = $pager_manager;
+   }
+ 
+   /**
+@@ -38,7 +62,9 @@ class AuditFilesUsedNotManaged extends FormBase implements ConfirmFormInterface
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+-      $container->get('config.factory')
++      $container->get('config.factory'),
++      $container->get('auditfiles.used_not_managed'),
++      $container->get('pager.manager')
+     );
+   }
+ 
+@@ -137,17 +163,17 @@ class AuditFilesUsedNotManaged extends FormBase implements ConfirmFormInterface
+       }
+       return $form;
+     }
+-    $file_ids = \Drupal::service('auditfiles.used_not_managed')->auditfilesUsedNotManagedGetFileList();
++    $file_ids = $this->filesUsedNotManaged->auditfilesUsedNotManagedGetFileList();
+     if (!empty($file_ids)) {
+       foreach ($file_ids as $file_id) {
+-        $rows[$file_id] = \Drupal::service('auditfiles.used_not_managed')->auditfilesUsedNotManagedGetFileData($file_id);
++        $rows[$file_id] = $this->filesUsedNotManaged->auditfilesUsedNotManagedGetFileData($file_id);
+       }
+     }
+     // Set up the pager.
+     if (!empty($rows)) {
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+     }
+@@ -169,7 +195,7 @@ class AuditFilesUsedNotManaged extends FormBase implements ConfirmFormInterface
+     // Create the form table.
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.used_not_managed')->auditfilesUsedNotManagedGetHeader(),
++      '#header' => $this->filesUsedNotManaged->auditfilesUsedNotManagedGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -231,7 +257,7 @@ class AuditFilesUsedNotManaged extends FormBase implements ConfirmFormInterface
+    * Submit handler for confirmation.
+    */
+   public function confirmSubmissionHandlerDeleteFile(array &$form, FormStateInterface $form_state) {
+-    batch_set(\Drupal::service('auditfiles.used_not_managed')->auditfilesUsedNotManagedBatchDeleteCreateBatch($form_state->getValue('changelist')));
++    batch_set($this->filesUsedNotManaged->auditfilesUsedNotManagedBatchDeleteCreateBatch($form_state->getValue('changelist')));
+   }
+ 
+ }
+diff --git a/src/Form/AuditFilesUsedNotReferenced.php b/src/Form/AuditFilesUsedNotReferenced.php
+index 7773a5c..af5c7b7 100644
+--- a/src/Form/AuditFilesUsedNotReferenced.php
++++ b/src/Form/AuditFilesUsedNotReferenced.php
+@@ -7,11 +7,12 @@ use Drupal\Core\Form\FormBase;
+ use Drupal\Core\Form\FormStateInterface;
+ use Drupal\Core\Form\ConfirmFormHelper;
+ use Drupal\Core\Url;
+-use Drupal\file\Entity\File;
+ use Drupal\Core\Config\ConfigFactoryInterface;
+-use Drupal\Core\DependencyInjection\ContainerInjectionInterface;
+ use Symfony\Component\DependencyInjection\ContainerInterface;
+ use Drupal\Core\Messenger\MessengerTrait;
++use Drupal\auditfiles\ServiceAuditFilesUsedNotReferenced;
++use Drupal\Core\Pager\PagerManagerInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ 
+ /**
+  * File used but not referenced functionality.
+@@ -26,12 +27,45 @@ class AuditFilesUsedNotReferenced extends FormBase implements ConfirmFormInterfa
+    * @var \Drupal\Core\Config\ConfigFactoryInterface
+    */
+   protected $configFactoryStorage;
+-  
++
++  /**
++   * The auditfiles.used_not_referenced service.
++   *
++   * @var \Drupal\auditfiles\ServiceAuditFilesUsedNotReferenced
++   */
++  protected $filesUsedNotReferenced;
++
++  /**
++   * The pager.manager service.
++   *
++   * @var \Drupal\Core\Pager\PagerManagerInterface
++   */
++  protected $pagerManager;
++
+   /**
+-   * @param ConfigFactoryInterface $config_factory
++   * The entity_type.manager service.
++   *
++   * @var Drupal\Core\Entity\EntityTypeManagerInterface
++   */
++  protected $entityTypeManager;
++
++  /**
++   * Class Constructor.
++   *
++   * @param Drupal\Core\Config\ConfigFactoryInterface $config_factory
++   *   The configuration service.
++   * @param Drupal\auditfiles\ServiceAuditFilesUsedNotReferenced $files_used_not_referenced
++   *   The auditfiles.used_not_referenced service.
++   * @param Drupal\Core\Pager\PagerManagerInterface $pager_manager
++   *   The pager.manager service.
++   * @param Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   *   The entity_type.manager service.
+    */
+-  public function __construct(ConfigFactoryInterface $config_factory) {
++  public function __construct(ConfigFactoryInterface $config_factory, ServiceAuditFilesUsedNotReferenced $files_used_not_referenced, PagerManagerInterface $pager_manager, EntityTypeManagerInterface $entity_type_manager) {
+     $this->configFactoryStorage = $config_factory;
++    $this->filesUsedNotReferenced = $files_used_not_referenced;
++    $this->pagerManager = $pager_manager;
++    $this->entityTypeManager = $entity_type_manager;
+   }
+ 
+   /**
+@@ -39,7 +73,10 @@ class AuditFilesUsedNotReferenced extends FormBase implements ConfirmFormInterfa
+    */
+   public static function create(ContainerInterface $container) {
+     return new static(
+-      $container->get('config.factory')
++      $container->get('config.factory'),
++      $container->get('auditfiles.used_not_referenced'),
++      $container->get('pager.manager'),
++      $container->get('entity_type.manager')
+     );
+   }
+ 
+@@ -110,7 +147,7 @@ class AuditFilesUsedNotReferenced extends FormBase implements ConfirmFormInterfa
+       if (!empty($values)) {
+         foreach ($values as $file_id) {
+           if (!empty($file_id)) {
+-            $file = File::load($file_id);
++            $file = $this->entityTypeManager->getStorage('file')->load($file_id);
+             if (!empty($file)) {
+               $form['changelist'][$file_id] = [
+                 '#type' => 'hidden',
+@@ -142,17 +179,17 @@ class AuditFilesUsedNotReferenced extends FormBase implements ConfirmFormInterfa
+       }
+       return $form;
+     }
+-    $file_ids = \Drupal::service('auditfiles.used_not_referenced')->auditfilesUsedNotReferencedGetFileList();
++    $file_ids = $this->filesUsedNotReferenced->auditfilesUsedNotReferencedGetFileList();
+     if (!empty($file_ids)) {
+       foreach ($file_ids as $file_id) {
+-        $rows[$file_id] = \Drupal::service('auditfiles.used_not_referenced')->auditfilesUsedNotReferencedGetFileData($file_id);
++        $rows[$file_id] = $this->filesUsedNotReferenced->auditfilesUsedNotReferencedGetFileData($file_id);
+       }
+     }
+     // Set up the pager.
+     if (!empty($rows)) {
+       $items_per_page = $config->get('auditfiles_report_options_items_per_page') ? $config->get('auditfiles_report_options_items_per_page') : 50;
+       if (!empty($items_per_page)) {
+-        $current_page = \Drupal::service('pager.manager')->createPager(count($rows), $items_per_page)->getCurrentPage();
++        $current_page = $this->pagerManager->createPager(count($rows), $items_per_page)->getCurrentPage();
+         // Break the total data set into page sized chunks.
+         $pages = array_chunk($rows, $items_per_page, TRUE);
+       }
+@@ -174,7 +211,7 @@ class AuditFilesUsedNotReferenced extends FormBase implements ConfirmFormInterfa
+     // Create the form table.
+     $form['files'] = [
+       '#type' => 'tableselect',
+-      '#header' => \Drupal::service('auditfiles.used_not_referenced')->auditfilesUsedNotReferencedGetHeader(),
++      '#header' => $this->filesUsedNotReferenced->auditfilesUsedNotReferencedGetHeader(),
+       '#empty' => $this->t('No items found.'),
+       '#prefix' => '<div><em>' . $form_count . '</em></div>',
+     ];
+@@ -234,7 +271,7 @@ class AuditFilesUsedNotReferenced extends FormBase implements ConfirmFormInterfa
+    * Submit form after confirmation.
+    */
+   public function confirmSubmissionHandlerDeleteFile(array &$form, FormStateInterface $form_state) {
+-    batch_set(\Drupal::service('auditfiles.used_not_referenced')->auditfilesUsedNotReferencedBatchDeleteCreateBatch($form_state->getValue('changelist')));
++    batch_set($this->filesUsedNotReferenced->auditfilesUsedNotReferencedBatchDeleteCreateBatch($form_state->getValue('changelist')));
+   }
+ 
+ }
+diff --git a/src/ServiceAuditFilesManagedNotUsed.php b/src/ServiceAuditFilesManagedNotUsed.php
+index ebbdc65..5c76405 100644
+--- a/src/ServiceAuditFilesManagedNotUsed.php
++++ b/src/ServiceAuditFilesManagedNotUsed.php
+@@ -2,7 +2,6 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Core\Messenger\MessengerTrait;
+@@ -23,7 +22,7 @@ class ServiceAuditFilesManagedNotUsed {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+@@ -37,16 +36,16 @@ class ServiceAuditFilesManagedNotUsed {
+    *
+    * @var Drupal\Core\Datetime\DateFormatter
+    */
+-  protected $date_formatter;
++  protected $dateFormatter;
+ 
+   /**
+    * Define constructor for string translation.
+    */
+   public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, DateFormatter $date_formatter) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+-    $this->date_formatter = $date_formatter;
++    $this->dateFormatter = $date_formatter;
+   }
+ 
+   /**
+@@ -56,7 +55,7 @@ class ServiceAuditFilesManagedNotUsed {
+    *   The file IDs.
+    */
+   public function auditfilesManagedNotUsedGetFileList() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $connection = $this->connection;
+     $query = 'SELECT fid FROM {file_managed} WHERE fid NOT IN (SELECT fid FROM {file_usage})';
+     $maximum_records = $config->get('auditfiles_report_options_maximum_records') ? $config->get('auditfiles_report_options_maximum_records') : 250;
+@@ -102,7 +101,7 @@ class ServiceAuditFilesManagedNotUsed {
+       'path' => $this->fileSystem->realpath($file->uri),
+       'filemime' => $file->filemime,
+       'filesize' => number_format($file->filesize),
+-      'datetime' => $this->date_formatter->format($file->created, $date_format),
++      'datetime' => $this->dateFormatter->format($file->created, $date_format),
+       'status' => ($file->status = 1) ? 'Permanent' : 'Temporary',
+     ];
+   }
+@@ -197,4 +196,5 @@ class ServiceAuditFilesManagedNotUsed {
+       );
+     }
+   }
++
+ }
+diff --git a/src/ServiceAuditFilesMergeFileReferences.php b/src/ServiceAuditFilesMergeFileReferences.php
+index 5390a98..4a9b633 100644
+--- a/src/ServiceAuditFilesMergeFileReferences.php
++++ b/src/ServiceAuditFilesMergeFileReferences.php
+@@ -2,9 +2,7 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+ use Drupal\Core\Entity\EntityStorageInterface;
+-use Drupal\file\Entity\File;
+ use Drupal\Component\Render\FormattableMarkup;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -13,6 +11,7 @@ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\File\FileSystemInterface;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ 
+ /**
+  * Define all methods that used in merge file references functionality.
+@@ -27,7 +26,7 @@ class ServiceAuditFilesMergeFileReferences {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+@@ -41,24 +40,32 @@ class ServiceAuditFilesMergeFileReferences {
+    *
+    * @var Drupal\Core\Datetime\DateFormatter
+    */
+-  protected $date_formatter;
++  protected $dateFormatter;
+ 
+   /**
+    * The file system service.
+    *
+    * @var \Drupal\Core\File\FileSystemInterface
+    */
+-  protected $file_system;
++  protected $fileSystem;
++
++  /**
++   * The entity type manager service.
++   *
++   * @var \Drupal\Core\Entity\EntityTypeManagerInterface
++   */
++  protected $entityTypeManager;
+ 
+   /**
+    * Define constructor for string translation.
+    */
+-  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, DateFormatter $date_formatter, FileSystemInterface $file_system) {
++  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, DateFormatter $date_formatter, FileSystemInterface $file_system, EntityTypeManagerInterface $entity_type_manager) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+-    $this->date_formatter = $date_formatter;
+-    $this->file_system = $file_system;
++    $this->dateFormatter = $date_formatter;
++    $this->fileSystem = $file_system;
++    $this->entityTypeManager = $entity_type_manager;
+   }
+ 
+   /**
+@@ -68,7 +75,7 @@ class ServiceAuditFilesMergeFileReferences {
+    *   The file IDs.
+    */
+   public function auditfilesMergeFileReferencesGetFileList() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $connection = $this->connection;
+     $result_set = [];
+     $query = 'SELECT fid, filename FROM {file_managed} ORDER BY filename ASC';
+@@ -137,7 +144,7 @@ class ServiceAuditFilesMergeFileReferences {
+             '%id' => $file->fid,
+             '%file' => $file->filename,
+             '%uri' => $file->uri,
+-            '%date' => $this->date_formatter->format($file->created, $date_format),
++            '%date' => $this->dateFormatter->format($file->created, $date_format),
+           ]
+         ) . '</li>';
+       }
+@@ -226,11 +233,6 @@ class ServiceAuditFilesMergeFileReferences {
+       return;
+     }
+     $file_being_kept_data = reset($file_being_kept_results);
+-    $file_being_kept_name_results = $connection->select('file_managed', 'fm')
+-      ->fields('fm', ['filename'])
+-      ->condition('fid', $file_being_kept)
+-      ->execute()
+-      ->fetchAll();
+     $file_being_merged_results = $connection->select('file_usage', 'fu')
+       ->fields('fu', ['module', 'type', 'id', 'count'])
+       ->condition('fid', $file_being_merged)
+@@ -284,7 +286,7 @@ class ServiceAuditFilesMergeFileReferences {
+       ->execute();
+     // Delete the duplicate file.
+     if (!empty($file_being_merged_uri->uri)) {
+-      $this->file_system->delete($file_being_merged_uri->uri);
++      $this->fileSystem->delete($file_being_merged_uri->uri);
+     }
+   }
+ 
+@@ -297,21 +299,21 @@ class ServiceAuditFilesMergeFileReferences {
+    *   The file ID of the file to merge.
+    */
+   public function auditfilesMergeFileReferencesUpdateFileFields($file_being_kept, $file_being_merged) {
+-    $file_being_merged_fields = file_get_file_references(File::load($file_being_merged), NULL, EntityStorageInterface::FIELD_LOAD_REVISION, NULL);
++    $file_being_merged_fields = file_get_file_references($this->entityTypeManager->getStorage('file')->load($file_being_merged), NULL, EntityStorageInterface::FIELD_LOAD_REVISION, NULL);
+     if (empty($file_being_merged_fields)) {
+       return;
+     }
+     foreach ($file_being_merged_fields as $field_name => $field_references) {
+       foreach ($field_references as $entity_type => $type_references) {
+         foreach ($type_references as $id => $reference) {
+-          $entity = \Drupal::entityTypeManager()->getStorage($entity_type)->load($id);
++          $entity = $this->entityTypeManager->getStorage($entity_type)->load($id);
+           if ($entity) {
+             $field_items = $entity->get($field_name)->getValue();
+             $alt = $field_items[0]['alt'];
+             $title = $field_items[0]['title'] ? $field_items[0]['title'] : '';
+             foreach ($field_items as $item) {
+               if ($item['target_id'] == $file_being_merged) {
+-                $file_object_being_kept = File::load($file_being_kept);
++                $file_object_being_kept = $this->entityTypeManager->getStorage('file')->load($file_being_kept);
+                 if (!empty($file_object_being_kept) && $entity->get($field_name)->getValue() != $file_being_kept) {
+                   $entity->$field_name = [
+                     'target_id' => $file_object_being_kept->id(),
+@@ -319,7 +321,7 @@ class ServiceAuditFilesMergeFileReferences {
+                     'title' => $title,
+                   ];
+                 }
+-              $entity->save();
++                $entity->save();
+                 break;
+               }
+             }
+diff --git a/src/ServiceAuditFilesNotInDatabase.php b/src/ServiceAuditFilesNotInDatabase.php
+index 421af5e..4307454 100644
+--- a/src/ServiceAuditFilesNotInDatabase.php
++++ b/src/ServiceAuditFilesNotInDatabase.php
+@@ -2,8 +2,6 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+-use Drupal\user\Entity\User;
+ use Drupal\Core\StreamWrapper\StreamWrapperInterface;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+@@ -13,6 +11,10 @@ use Drupal\Core\Database\Connection;
+ use Drupal\Core\StreamWrapper\StreamWrapperManager;
+ use Drupal\Core\Datetime\DateFormatter;
+ use Drupal\Core\File\FileSystemInterface;
++use Drupal\Core\Session\AccountProxyInterface;
++use Drupal\Core\File\MimeType\MimeTypeGuesser;
++use Drupal\Component\Datetime\TimeInterface;
++use Drupal\Component\Uuid\UuidInterface;
+ 
+ /**
+  * Define all methods that are used on Files not in database functionality.
+@@ -27,12 +29,12 @@ class ServiceAuditFilesNotInDatabase {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+    *
+-   * @var \Drupal\Core\Database\Connection
++   * @var Drupal\Core\Database\Connection
+    */
+   protected $connection;
+ 
+@@ -41,39 +43,71 @@ class ServiceAuditFilesNotInDatabase {
+    *
+    * @var Drupal\Core\StreamWrapper\StreamWrapperManager
+    */
+-  protected $stream_wrapper_manage;
++  protected $streamWrapperManager;
+ 
+   /**
+    * The Date Formatter.
+    *
+    * @var Drupal\Core\Datetime\DateFormatter
+    */
+-  protected $date_formatter;
++  protected $dateFormatter;
+ 
+   /**
+    * The file system service.
+    *
+-   * @var \Drupal\Core\File\FileSystemInterface
++   * @var Drupal\Core\File\FileSystemInterface
+    */
+-  protected $file_system;
++  protected $fileSystem;
++
++  /**
++   * The current user from the current sesson.
++   *
++   * @var Drupal\Core\Session\AccountProxyInterface
++   */
++  protected $currentUser;
++
++  /**
++   * The file.mime_type.guesser service.
++   *
++   * @var Drupal\Core\File\MimeType\MimeTypeGuesser
++   */
++  protected $fileMimeTypeGuesser;
++
++  /**
++   * The system time service.
++   *
++   * @var Drupal\Component\Datetime\TimeInterface
++   */
++  protected $timeService;
++
++  /**
++   * The uuid service.
++   *
++   * @var Drupal\Component\Uuid\UuidInterface
++   */
++  protected $uuid;
+ 
+   /**
+    * Define constructor for string translation.
+    */
+-  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, StreamWrapperManager $stream_wrapper_manage, DateFormatter $date_formatter, FileSystemInterface $file_system) {
++  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, StreamWrapperManager $stream_wrapper_manage, DateFormatter $date_formatter, FileSystemInterface $file_system, AccountProxyInterface $current_user, MimeTypeGuesser $file_mime_type_guesser, TimeInterface $time_service, UuidInterface $uuid) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+-    $this->stream_wrapper_manage = $stream_wrapper_manage;
+-    $this->date_formatter = $date_formatter;
+-    $this->file_system = $file_system;
++    $this->streamWrapperManager = $stream_wrapper_manage;
++    $this->dateFormatter = $date_formatter;
++    $this->fileSystem = $file_system;
++    $this->currentUser = $current_user;
++    $this->fileMimeTypeGuesser = $file_mime_type_guesser;
++    $this->timeService = $time_service;
++    $this->uuid = $uuid;
+   }
+ 
+   /**
+    * Get the files that are not in database.
+    */
+   public function auditfilesNotInDatabaseGetReportsFiles() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $report_files = [];
+     $reported_files = [];
+     $this->auditfilesNotInDatabaseGetFilesForReport('', $report_files);
+@@ -81,7 +115,7 @@ class ServiceAuditFilesNotInDatabase {
+       // Get the static paths necessary for processing the files.
+       $file_system_stream = $config->get('auditfiles_file_system_path') ? $config->get('auditfiles_file_system_path') : 'public';
+       // The full file system path to the Drupal root directory.
+-      $real_files_path = \Drupal::service('file_system')->realpath($file_system_stream . '://');
++      $real_files_path = $this->fileSystem->realpath($file_system_stream . '://');
+       // Get the chosen date format for displaying the file dates with.
+       $date_format = $config->get('auditfiles_report_options_date_format') ? $config->get('auditfiles_report_options_date_format') : 'long';
+       foreach ($report_files as $report_file) {
+@@ -108,9 +142,9 @@ class ServiceAuditFilesNotInDatabase {
+    * Get files for report.
+    */
+   public function auditfilesNotInDatabaseGetFilesForReport($path, array &$report_files) {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $file_system_stream = $config->get('auditfiles_file_system_path') ? $config->get('auditfiles_file_system_path') : 'public';
+-    $real_files_path = $real_files_path = \Drupal::service('file_system')->realpath($file_system_stream . '://');
++    $real_files_path = $real_files_path = $this->fileSystem->realpath($file_system_stream . '://');
+     $maximum_records = $config->get('auditfiles_report_options_maximum_records') ? $config->get('auditfiles_report_options_maximum_records') : 250;
+     if ($maximum_records > 0 && count($report_files) < $maximum_records) {
+       $new_files = $this->auditfilesNotInDatabaseGetFiles($path);
+@@ -175,10 +209,10 @@ class ServiceAuditFilesNotInDatabase {
+       $filepathname = $filepath . DIRECTORY_SEPARATOR . $filename;
+     }
+     $real_filepathname = $real_path . DIRECTORY_SEPARATOR . $filepathname;
+-    $filemime = \Drupal::service('file.mime_type.guesser')->guess($real_filepathname);
++    $filemime = $this->fileMimeTypeGuesser->guess($real_filepathname);
+     $filesize = number_format(filesize($real_filepathname));
+     if (!empty($date_format)) {
+-      $filemodtime = $this->date_formatter->format(filemtime($real_filepathname), $date_format);
++      $filemodtime = $this->dateFormatter->format(filemtime($real_filepathname), $date_format);
+     }
+     // Format the data for the table row.
+     $row_data[$filepathname] = [
+@@ -201,9 +235,9 @@ class ServiceAuditFilesNotInDatabase {
+    *   The list of files and diretories found in the given path.
+    */
+   public function auditfilesNotInDatabaseGetFiles($path) {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $file_system_stream = $config->get('auditfiles_file_system_path') ? $config->get('auditfiles_file_system_path') : 'public';
+-    $real_files_path = $real_files_path = \Drupal::service('file_system')->realpath($file_system_stream . '://');
++    $real_files_path = $real_files_path = $this->fileSystem->realpath($file_system_stream . '://');
+     $exclusions = $this->auditfilesGetExclusions();
+     // The variable to store the data being returned.
+     $file_list = [];
+@@ -263,7 +297,7 @@ class ServiceAuditFilesNotInDatabase {
+    *   The excluions.
+    */
+   public function auditfilesGetExclusions() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $exclusions_array = [];
+     $files = trim($config->get('auditfiles_exclude_files') ? $config->get('auditfiles_exclude_files') : '.htaccess');
+     if ($files) {
+@@ -280,11 +314,11 @@ class ServiceAuditFilesNotInDatabase {
+     // Exclude other file streams that may be deinfed and in use.
+     $exclude_streams = [];
+     $auditfiles_file_system_path = $config->get('auditfiles_file_system_path') ? $config->get('auditfiles_file_system_path') : 'public';
+-    $file_system_paths = $this->stream_wrapper_manage->getWrappers(StreamWrapperInterface::LOCAL);
++    $file_system_paths = $this->streamWrapperManager->getWrappers(StreamWrapperInterface::LOCAL);
+     foreach ($file_system_paths as $file_system_path_id => $file_system_path) {
+       if ($file_system_path_id != $auditfiles_file_system_path) {
+         $uri = $file_system_path_id . '://';
+-        if ($wrapper = $this->stream_wrapper_manage->getViaUri($uri)) {
++        if ($wrapper = $this->streamWrapperManager->getViaUri($uri)) {
+           $exclude_streams[] = $wrapper->realpath();
+         }
+       }
+@@ -397,18 +431,17 @@ class ServiceAuditFilesNotInDatabase {
+    *   The full pathname to the file to add to the database.
+    */
+   public function auditfilesNotInDatabaseBatchAddProcessFile($filepathname) {
+-    $user = User::load(\Drupal::currentUser()->id());
++    $user = $this->currentUser->id();
+     $file = new \StdClass();
+     $file->uid = $user->get('uid')->value;
+     $file->filename = trim(basename($filepathname));
+     $file->uri = file_build_uri($filepathname);
+-    $real_filenamepath = \Drupal::service('file_system')->realpath($file->uri);
+-    $file->filemime = \Drupal::service('file.mime_type.guesser')->guess($real_filenamepath);
++    $real_filenamepath = $this->fileSystem->realpath($file->uri);
++    $file->filemime = $this->fileMimeTypeGuesser->guess($real_filenamepath);
+     $file->filesize = filesize($real_filenamepath);
+     $file->status = FILE_STATUS_PERMANENT;
+-    $file->timestamp =  \Drupal::time()->getCurrentTime();
+-    $uuid_service = \Drupal::service('uuid');
+-    $uuid = $uuid_service->generate();
++    $file->timestamp = $this->timeService->getCurrentTime();
++    $uuid = $this->uuid->generate();
+ 
+     $connection = $this->connection;
+     $query = $connection->select('file_managed', 'fm');
+@@ -416,7 +449,7 @@ class ServiceAuditFilesNotInDatabase {
+     $query->fields('fm', ['fid']);
+     $existing_file = $query->execute()->fetchField();
+     if (empty($existing_file)) {
+-      $results = \Drupal::database()->merge('file_managed')
++      $results = $this->connection->merge('file_managed')
+         ->key(['fid' => NULL])
+         ->fields([
+           'fid' => NULL,
+@@ -488,11 +521,11 @@ class ServiceAuditFilesNotInDatabase {
+    *   The full pathname of the file to delete from the server.
+    */
+   public function auditfilesNotInDatabaseBatchDeleteProcessFile($filename) {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $file_system_stream = $config->get('auditfiles_file_system_path') ? $config->get('auditfiles_file_system_path') : 'public';
+-    $real_files_path = \Drupal::service('file_system')->realpath($file_system_stream . '://');
++    $real_files_path = $this->fileSystem->realpath($file_system_stream . '://');
+ 
+-    if ($this->file_system->delete($real_files_path . DIRECTORY_SEPARATOR . $filename)) {
++    if ($this->fileSystem->delete($real_files_path . DIRECTORY_SEPARATOR . $filename)) {
+       $this->messenger()->addStatus(
+         $this->t('Sucessfully deleted %file from the server.', ['%file' => $filename])
+       );
+diff --git a/src/ServiceAuditFilesNotOnServer.php b/src/ServiceAuditFilesNotOnServer.php
+index 48f0454..3402e96 100644
+--- a/src/ServiceAuditFilesNotOnServer.php
++++ b/src/ServiceAuditFilesNotOnServer.php
+@@ -2,13 +2,13 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Core\Messenger\MessengerTrait;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Datetime\DateFormatter;
++use Drupal\Core\File\FileSystemInterface;
+ 
+ /**
+  * Providing the service that used in not in database functionality.
+@@ -23,7 +23,7 @@ class ServiceAuditFilesNotOnServer {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+@@ -37,16 +37,24 @@ class ServiceAuditFilesNotOnServer {
+    *
+    * @var Drupal\Core\Datetime\DateFormatter
+    */
+-  protected $date_formatter;
++  protected $dateFormatter;
++
++  /**
++   * The File System service.
++   *
++   * @var Drupal\Core\File\FileSystemInterface
++   */
++  protected $fileSystem;
+ 
+   /**
+    * Define constructor for string translation.
+    */
+-  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, DateFormatter $date_formatter) {
++  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, DateFormatter $date_formatter, FileSystemInterface $file_system) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+-    $this->date_formatter = $date_formatter;
++    $this->dateFormatter = $date_formatter;
++    $this->fileSystem = $file_system;
+   }
+ 
+   /**
+@@ -56,7 +64,7 @@ class ServiceAuditFilesNotOnServer {
+    *   The file IDs.
+    */
+   public function auditfilesNotOnServerGetFileList() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $file_ids = [];
+     $maximum_records = $config->get('auditfiles_report_options_maximum_records') ? $config->get('auditfiles_report_options_maximum_records') : 250;
+     $connection = $this->connection;
+@@ -65,7 +73,7 @@ class ServiceAuditFilesNotOnServer {
+     $query->fields('fm', ['fid', 'uri']);
+     $results = $query->execute()->fetchAll();
+     foreach ($results as $result) {
+-      $target = \Drupal::service('file_system')->realpath($result->uri);
++      $target = $this->fileSystem->realpath($result->uri);
+       if (!file_exists($target)) {
+         $file_ids[] = $result->fid;
+       }
+@@ -106,10 +114,10 @@ class ServiceAuditFilesNotOnServer {
+       'uid' => $file->uid,
+       'filename' => $file->filename,
+       'uri' => $file->uri,
+-      'path' => \Drupal::service('file_system')->realpath($file->uri),
++      'path' => $this->fileSystem->realpath($file->uri),
+       'filemime' => $file->filemime,
+       'filesize' => number_format($file->filesize),
+-      'datetime' => $this->date_formatter->format($file->created, $date_format),
++      'datetime' => $this->dateFormatter->format($file->created, $date_format),
+       'status' => ($file->status = 1) ? 'Permanent' : 'Temporary',
+     ];
+   }
+@@ -161,7 +169,7 @@ class ServiceAuditFilesNotOnServer {
+    * @return array
+    *   The definition of the batch.
+    */
+-  public function auditfilesNotOnServerBatchDeleteCeateBatch(array $fileids) {
++  public function auditfilesNotOnServerBatchDeleteCreateBatch(array $fileids) {
+     $batch['error_message'] = $this->t('One or more errors were encountered processing the files.');
+     $batch['finished'] = '\Drupal\auditfiles\AuditFilesBatchProcess::auditfilesNotOnServerBatchFinishBatch';
+     $batch['progress_message'] = $this->t('Completed @current of @total operations.');
+diff --git a/src/ServiceAuditFilesReferencedNotUsed.php b/src/ServiceAuditFilesReferencedNotUsed.php
+index d49e175..3ecde0f 100644
+--- a/src/ServiceAuditFilesReferencedNotUsed.php
++++ b/src/ServiceAuditFilesReferencedNotUsed.php
+@@ -2,16 +2,15 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+-use Drupal\file\Entity\File;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+ use Drupal\Core\StringTranslation\StringTranslationTrait;
+ use Drupal\Core\Messenger\MessengerTrait;
+ use Drupal\Core\Config\ConfigFactory;
+ use Drupal\Core\Database\Connection;
+ use Drupal\Core\Entity\EntityFieldManager;
++use Drupal\Core\Entity\EntityTypeManagerInterface;
+ 
+ /**
+  * List all methods used in referenced not used functionality.
+@@ -26,7 +25,7 @@ class ServiceAuditFilesReferencedNotUsed {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+@@ -40,16 +39,35 @@ class ServiceAuditFilesReferencedNotUsed {
+    *
+    * @var Drupal\Core\Entity\EntityFieldManager
+    */
+-  protected $entity_field_manager;
++  protected $entityFieldManager;
+ 
+   /**
+-   * Define constructor for string translation.
++   * The entity_type.manager service.
++   *
++   * @var Drupal\Core\Entity\EntityTypeManagerInterface
++   */
++  protected $entityTypeManager;
++
++  /**
++   * Class constructor.
++   *
++   * @param Drupal\Core\StringTranslation\TranslationInterface $translation
++   *   The translation service.
++   * @param Drupal\Core\Config\ConfigFactory $config_factory
++   *   The configuration service.
++   * @param Drupal\Core\Database\Connection $connection
++   *   The connection service.
++   * @param Drupal\Core\Entity\EntityFieldManager $entity_field_manager
++   *   The field manager service.
++   * @param Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
++   *   The entity type manager service.
+    */
+-  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, EntityFieldManager $entity_field_manager) {
++  public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, EntityFieldManager $entity_field_manager, EntityTypeManagerInterface $entity_type_manager) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+-    $this->entity_field_manager = $entity_field_manager;
++    $this->entityFieldManager = $entity_field_manager;
++    $this->entityTypeManager = $entity_type_manager;
+   }
+ 
+   /**
+@@ -59,16 +77,16 @@ class ServiceAuditFilesReferencedNotUsed {
+    *   The file IDs.
+    */
+   public function auditfilesReferencedNotUsedGetFileList() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $connection = $this->connection;
+     $file_references = $files_referenced = [];
+     // Get a list of all files that are referenced in content.
+-    $files_in_fields = [];
+-    $fields[] = $this->entity_field_manager->getFieldMapByFieldType('image');
+-    $fields[] = $this->entity_field_manager->getFieldMapByFieldType('file');
++    $fields = [];
++    $fields[] = $this->entityFieldManager->getFieldMapByFieldType('image');
++    $fields[] = $this->entityFieldManager->getFieldMapByFieldType('file');
+     if ($fields) {
+       $count = 0;
+-      foreach ($fields as $key => $value) {
++      foreach ($fields as $value) {
+         foreach ($value as $table_prefix => $entity_type) {
+           foreach ($entity_type as $key1 => $value1) {
+             $field_data[$count]['table'] = $table_prefix . '__' . $key1;
+@@ -78,7 +96,7 @@ class ServiceAuditFilesReferencedNotUsed {
+           }
+         }
+       }
+-      foreach ($field_data as $key => $value) {
++      foreach ($field_data as $value) {
+         $table = $value['table'];
+         $column = $value['column'];
+         $entity_type = $value['entity_type'];
+@@ -117,7 +135,6 @@ class ServiceAuditFilesReferencedNotUsed {
+    *   information formatted for display.
+    */
+   public function auditfilesReferencedNotUsedGetFileData(array $row_data) {
+-    $config = $this->config_factory->get('auditfiles.settings');
+     $connection = $this->connection;
+     $query = 'SELECT * FROM {' . $row_data['table'] . '} WHERE ' . $row_data['column'] . ' = ' . $row_data['file_id'];
+     $result = $connection->query($query)->fetchAll();
+@@ -144,7 +161,7 @@ class ServiceAuditFilesReferencedNotUsed {
+     ];
+     // If there is a file in the file_managed table, add some of that
+     // information to the row, too.
+-    $file_managed = File::load($result->{$row_data['column']});
++    $file_managed = $this->entityTypeManager->getStorage('file')->load($result->{$row_data['column']});
+     if (!empty($file_managed)) {
+       $row['uri'] = $file_managed->getFileuri();
+       $row['filename'] = ['data' => $file_managed->getFilename(), 'hidden' => TRUE];
+diff --git a/src/ServiceAuditFilesUsedNotManaged.php b/src/ServiceAuditFilesUsedNotManaged.php
+index fd67fec..06fecfb 100644
+--- a/src/ServiceAuditFilesUsedNotManaged.php
++++ b/src/ServiceAuditFilesUsedNotManaged.php
+@@ -2,7 +2,6 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+ use Drupal\Core\StringTranslation\TranslationInterface;
+@@ -24,7 +23,7 @@ class ServiceAuditFilesUsedNotManaged {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+@@ -35,6 +34,9 @@ class ServiceAuditFilesUsedNotManaged {
+ 
+   /**
+    * Define constructor for string translation.
++   *
++   * @param \Drupal\Core\StringTranslation\TranslationInterface $translation
++   *   A Tranlation Serevice object.
+    * @param \Drupal\Core\Config\ConfigFactory $config_factory
+    *   A configuration factory object.
+    * @param \Drupal\Core\Database\Connection $connection
+@@ -42,7 +44,7 @@ class ServiceAuditFilesUsedNotManaged {
+    */
+   public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+   }
+ 
+@@ -55,9 +57,8 @@ class ServiceAuditFilesUsedNotManaged {
+   public function auditfilesUsedNotManagedGetFileList() {
+     // Get all the file IDs in the file_usage table that are not in the
+     // file_managed table.
+-
+     $connection = $this->connection;
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $query = 'SELECT DISTINCT fid FROM {file_usage} fu WHERE fid NOT IN (SELECT fid FROM {file_managed})';
+     $maximum_records = $config->get('auditfiles_report_options_maximum_records') ? $config->get('auditfiles_report_options_maximum_records') : 250;
+ 
+diff --git a/src/ServiceAuditFilesUsedNotReferenced.php b/src/ServiceAuditFilesUsedNotReferenced.php
+index eeae5f7..996deaf 100644
+--- a/src/ServiceAuditFilesUsedNotReferenced.php
++++ b/src/ServiceAuditFilesUsedNotReferenced.php
+@@ -2,7 +2,6 @@
+ 
+ namespace Drupal\auditfiles;
+ 
+-use Drupal\Core\Database\Database;
+ use Drupal\Core\Link;
+ use Drupal\Core\Url;
+ use Drupal\Component\Render\FormattableMarkup;
+@@ -26,7 +25,7 @@ class ServiceAuditFilesUsedNotReferenced {
+    *
+    * @var Drupal\Core\Config\ConfigFactory
+    */
+-  protected $config_factory;
++  protected $configFactory;
+ 
+   /**
+    * The database connection.
+@@ -40,16 +39,16 @@ class ServiceAuditFilesUsedNotReferenced {
+    *
+    * @var Drupal\Core\Entity\EntityFieldManager
+    */
+-  protected $entity_field_manager;
++  protected $entityFieldManager;
+ 
+   /**
+    * Define constructor for string translation.
+    */
+   public function __construct(TranslationInterface $translation, ConfigFactory $config_factory, Connection $connection, EntityFieldManager $entity_field_manager) {
+     $this->stringTranslation = $translation;
+-    $this->config_factory = $config_factory;
++    $this->configFactory = $config_factory;
+     $this->connection = $connection;
+-    $this->entity_field_manager = $entity_field_manager;
++    $this->entityFieldManager = $entity_field_manager;
+   }
+ 
+   /**
+@@ -59,7 +58,7 @@ class ServiceAuditFilesUsedNotReferenced {
+    *   The file IDs.
+    */
+   public function auditfilesUsedNotReferencedGetFileList() {
+-    $config = $this->config_factory->get('auditfiles.settings');
++    $config = $this->configFactory->get('auditfiles.settings');
+     $connection = $this->connection;
+     $query = 'SELECT DISTINCT fid FROM {file_usage} fu';
+     $maximum_records = $config->get('auditfiles_report_options_maximum_records') ? $config->get('auditfiles_report_options_maximum_records') : 250;
+@@ -68,10 +67,10 @@ class ServiceAuditFilesUsedNotReferenced {
+     }
+     $files_in_file_usage = $connection->query($query)->fetchCol();
+     $files_in_fields = [];
+-    $fields[] = $this->entity_field_manager->getFieldMapByFieldType('image');
+-    $fields[] = $this->entity_field_manager->getFieldMapByFieldType('file');
++    $fields[] = $this->entityFieldManager->getFieldMapByFieldType('image');
++    $fields[] = $this->entityFieldManager->getFieldMapByFieldType('file');
+     $count = 0;
+-    foreach ($fields as $key => $value) {
++    foreach ($fields as $value) {
+       foreach ($value as $table_prefix => $entity_type) {
+         foreach ($entity_type as $key1 => $value1) {
+           $field_data[$count]['table'] = $table_prefix . '__' . $key1;
+@@ -80,7 +79,7 @@ class ServiceAuditFilesUsedNotReferenced {
+         }
+       }
+     }
+-    foreach ($field_data as $key => $value) {
++    foreach ($field_data as $value) {
+       $table = $value['table'];
+       $column = $value['column'];
+       if ($this->connection->schema()->tableExists($table)) {
