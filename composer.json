@@ -90,9 +90,6 @@
             "drupal/core": "-p2"
         },
         "patches": {
-	  "drupal/auditfiles": {
-		"Testing coding standards fixes": "patches/coding-standards.patch"
-	   }
         }
     },
     "scripts": {
