@@ -91,7 +91,8 @@
         },
         "patches": {
             "drupal/auditfiles": {
-                "Switch to Dependency Injection": "https://www.drupal.org/files/issues/2020-06-26/3155136-5.patch"
+		"Fixing \"call to undefined method\" issue": "https://www.drupal.org/files/issues/2020-06-26/3155170-2.patch",
+                "Automated Tests": "https://www.drupal.org/files/issues/2020-06-26/3154446-13.patch"
             }
         }
     },
