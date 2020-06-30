@@ -18,14 +18,14 @@
         "composer/installers": "^1.2",
         "cweagans/composer-patches": "^1.6",
         "drupal/auditfiles": "2.x-dev",
-        "drupal/core-composer-scaffold": "^8.9",
-        "drupal/core-recommended": "^8.9",
+        "drupal/core-composer-scaffold": "^9.0",
+        "drupal/core-recommended": "^9.0",
         "drush/drush": "^10.2",
         "oomphinc/composer-installers-extender": "^1.1",
         "wikimedia/composer-merge-plugin": "^1.4"
     },
     "require-dev": {
-        "drupal/core-dev": "^8.9",
+        "drupal/core-dev": "^9.0",
         "genesis/behat-fail-aid": "^2.1",
         "mglaman/drupal-check": "^1.1",
         "roave/security-advisories": "dev-master",
@@ -91,8 +91,8 @@
         },
         "patches": {
             "drupal/auditfiles": {
-		"Fixing \"call to undefined method\" issue": "https://www.drupal.org/files/issues/2020-06-26/3155170-2.patch",
-                "Automated Tests": "https://www.drupal.org/files/issues/2020-06-26/3154446-13.patch"
+		"Automated test: AuditFilesReferencedNotUsed Report": "https://www.drupal.org/files/issues/2020-06-29/3155727-3.patch",
+		"Automated test: AuditFilesUsedNotReferenced Report": "https://www.drupal.org/files/issues/2020-06-29/3155728-5.patch"
             }
         }
     },
