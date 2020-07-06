@@ -90,10 +90,6 @@
             "drupal/core": "-p2"
         },
         "patches": {
-            "drupal/auditfiles": {
-		"Automated test: AuditFilesReferencedNotUsed Report": "https://www.drupal.org/files/issues/2020-06-29/3155727-3.patch",
-		"Automated test: AuditFilesUsedNotReferenced Report": "https://www.drupal.org/files/issues/2020-06-29/3155728-5.patch"
-            }
         }
     },
     "scripts": {
