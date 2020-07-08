@@ -66,8 +66,8 @@ before_script:
 script:
   # Run the PHPUnit tests.
   - $PROJECT_ROOT/vendor/bin/drush en simpletest
-  - php $DRUPAL_ROOT/core/scripts/run-tests.sh --verbose --module auditfiles --url http://nginx
-  #- $PROJECT_ROOT/vendor/bin/phpunit -c $DRUPAL_ROOT/core/phpunit.xml.dist --verbose --group=$MODULE $DRUPAL_ROOT/modules/contrib/$MODULE
+  #- php $DRUPAL_ROOT/core/scripts/run-tests.sh --verbose --module auditfiles --url http://nginx
+  - $PROJECT_ROOT/vendor/bin/phpunit -c $DRUPAL_ROOT/core/phpunit.xml.dist --verbose --group=$MODULE $DRUPAL_ROOT/modules/contrib/$MODULE
   - $PROJECT_ROOT/vendor/bin/drush pm:uninstall simpletest -y
 
   # Run the deprecation checks.

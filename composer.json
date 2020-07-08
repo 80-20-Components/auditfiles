@@ -18,14 +18,14 @@
         "composer/installers": "^1.2",
         "cweagans/composer-patches": "^1.6",
         "drupal/auditfiles": "3.x-dev",
-        "drupal/core-composer-scaffold": "^9.0",
-        "drupal/core-recommended": "^9.0",
+        "drupal/core-composer-scaffold": "^8.9",
+        "drupal/core-recommended": "^8.9",
         "drush/drush": "^10.2",
         "oomphinc/composer-installers-extender": "^1.1",
         "wikimedia/composer-merge-plugin": "^1.4"
     },
     "require-dev": {
-        "drupal/core-dev": "^9.0",
+        "drupal/core-dev": "^8.9",
         "genesis/behat-fail-aid": "^2.1",
         "mglaman/drupal-check": "^1.1",
         "vanare/behat-cucumber-json-formatter": "~1.1.1"
