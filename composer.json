@@ -28,7 +28,6 @@
         "drupal/core-dev": "^9.0",
         "genesis/behat-fail-aid": "^2.1",
         "mglaman/drupal-check": "^1.1",
-        "roave/security-advisories": "dev-master",
         "vanare/behat-cucumber-json-formatter": "~1.1.1"
     },
     "conflict": {
@@ -90,6 +89,9 @@
             "drupal/core": "-p2"
         },
         "patches": {
+	      "drupal/auditfiles": {
+	        "Exclude paths always map to default file system":"https://www.drupal.org/files/issues/2020-07-07/30049580-13.patch"
+          }
         }
     },
     "scripts": {
