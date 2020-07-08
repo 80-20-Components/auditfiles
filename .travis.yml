@@ -15,6 +15,7 @@ php:
 
 services:
   - mysql
+  - docker
 
 env:
   global:
@@ -34,6 +35,9 @@ cache:
     - $HOME/.composer
 
 before_script:
+  # Pull and start the headless chrome container for testing.
+  - docker pull zenika/alpine-chrome
+  - docker container run -d -p 4444:9222 zenika/alpine-chrome --no-sandbox --remote-debugging-address=0.0.0.0 --remote-debugging-port=4444
   # Remove Xdebug as we don't need it and it causes
   # PHP Fatal error:  Maximum function nesting level of '256' reached.
   # We also don't care if that file exists or not on PHP 7.
