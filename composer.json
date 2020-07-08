@@ -90,7 +90,7 @@
         },
         "patches": {
 	      "drupal/auditfiles": {
-	        "Exclude paths always map to default file system":"https://www.drupal.org/files/issues/2020-07-07/30049580-13.patch"
+	        "Exclude paths always map to default file system":"https://www.drupal.org/files/issues/2020-07-08/3004958-16_0.patch"
           }
         }
     },
