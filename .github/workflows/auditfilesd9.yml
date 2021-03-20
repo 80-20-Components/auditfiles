@@ -19,7 +19,6 @@ jobs:
       SIMPLETEST_BASE_URL: http://localhost:8888
       PROJECT_ROOT: .
       DRUPAL_ROOT: ./docroot
-      MINK_DRIVER_ARGS_WEBDRIVER: ["chrome", { "chromeOptions": { "w3c": false } }, "http://localhost:4444/wd/hub"]
     steps:
       - uses: actions/checkout@v2
       - uses: nanasess/setup-chromedriver@master
