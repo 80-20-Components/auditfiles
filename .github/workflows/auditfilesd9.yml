@@ -1,0 +1,62 @@
+name: auditfilesd9
+
+# Run this workflow every time a new commit is pushed to the repo
+on:
+  push:
+# The following will run on a schedule at 6am on Sundays
+  schedule:
+    - cron: '0 6 * * 0'
+
+jobs:
+  run-unit-tests:
+    name: Run PHPUnit Tests
+    runs-on:  ubuntu-latest
+    env:
+      MODULE: auditfiles
+      COMPOSER_MEMORY_LIMIT: -1
+      # Note, the username, password, port and db match mysql service setup.
+      SIMPLETEST_DB: mysql://drupal:drupal@127.0.0.1:3306/auditfiles
+    services:
+      db:
+        image: mysql:5.7
+        ports:
+        - 3306
+        env:
+          MYSQL_USER: drupal
+          MYSQL_PASSWORD: drupal
+          MYSQL_DATABASE: auditfiles
+          MYSQL_ROOT_PASSWORD: user
+        options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=2s --health-retries=3
+    steps:
+      - uses: actions/checkout@v2
+      - name: Verify MySQL Connection
+        env:
+          PORT: ${{ job.services.db.ports[3306] }}
+        run: |
+          while ! mysqladmin ping -h"127.0.0.1" -P"$PORT" --silent; do
+            sleep 1
+          done
+      - name: Set up php version (7.4)
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '7.4'
+          extensions: date, dom, filter, gd, hash, json, pcre, pdo, session, tokenizer, xml
+          # Includes code coveage for phpunit, but disables xDebug
+          coverage: pcov
+      - name: Check php version (7.4)
+        run: php --version
+      - name: set up chromedriver for headless chrome
+        uses: nanasess/setup-chromedriver@master
+      - name: Install latest Google Chrome
+        run: wget -q https://script.install.devinsideyou.com/google-chrome && chmod +x google-chrome
+      # Comes from Bolt project, may not be necessary
+      - name: Add chromedriver to PATH variable
+        run: export PATH="$(pwd)/vendor/bin:${PATH}"
+      - name: Echo out Path
+        run: echo $PATH
+      # Create new drupal project with Composer install
+      - name: Install drupal
+        run: composer update
+      # Check for Drupal coding standards
+      - name: Check for Drupal coding standards
+        uses: guix77/phpcs-drupal-action@v1.0.0

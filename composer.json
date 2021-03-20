@@ -21,14 +21,18 @@
         "drupal/core-composer-scaffold": "^8.9",
         "drupal/core-recommended": "^8.9",
         "drush/drush": "^10.2",
-        "oomphinc/composer-installers-extender": "^1.1",
-        "wikimedia/composer-merge-plugin": "^1.4"
+        "oomphinc/composer-installers-extender": "^2",
+        "wikimedia/composer-merge-plugin": "^2"
     },
     "require-dev": {
+        "dealerdirect/phpcodesniffer-composer-installer": "^0.7.1",
+        "drupal/coder": "^8.3",
         "drupal/core-dev": "^8.9",
         "genesis/behat-fail-aid": "^2.1",
         "mglaman/drupal-check": "^1.1",
-        "vanare/behat-cucumber-json-formatter": "~1.1.1"
+        "mglaman/phpstan-drupal":"^0.12.6",
+        "phpstan/extension-installer": "^1.0",
+        "phpunit/phpunit": "^7"
     },
     "conflict": {
         "drupal/drupal": "*"
@@ -99,6 +103,10 @@
         "post-update-cmd": [
             "if [ -n $TRAVIS ]; then find ./docroot -name .git -type d | xargs rm -rf; fi",
             "if [ -n $TRAVIS ]; then find ./vendor -name .git -type d | xargs rm -rf; fi"
+        ],
+        "static-analysis": [
+            "phpcs -p",
+            "phpstan analyze --memory-limit 1G"
         ]
     }
 }
