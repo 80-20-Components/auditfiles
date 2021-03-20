@@ -19,8 +19,14 @@ jobs:
       SIMPLETEST_BASE_URL: http://localhost:8888
       PROJECT_ROOT: .
       DRUPAL_ROOT: ./docroot
+      MINK_DRIVER_ARGS_WEBDRIVER: ["chrome", { "chromeOptions": { "w3c": false } }, "http://localhost:4444/wd/hub"]
     steps:
       - uses: actions/checkout@v2
+      - uses: nanasess/setup-chromedriver@master
+        run: |
+          export DISPLAY=:99
+          chromedriver --url-base=/wd/hub &
+          sudo Xvfb -ac :99 -screen 0 1280x1024x24 > /dev/null 2>&1 & # optional
       - name: Shut down Ubuntu MySQL
         run: sudo service mysql stop #shutdown default mysql, sudo is necessary
       - name: Set up MySQL
