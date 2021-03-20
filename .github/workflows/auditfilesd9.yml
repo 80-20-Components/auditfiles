@@ -17,6 +17,8 @@ jobs:
       # Note, the username, password, port and db match mysql service setup.
       SIMPLETEST_DB: mysql://drupal:drupal@127.0.0.1:3306/auditfiles
       SIMPLETEST_BASE_URL: http://localhost:8888
+      PROJECT_ROOT: .
+      DRUPAL_ROOT: ./docroot
     services:
       db:
         image: mysql:5.7
@@ -66,22 +68,22 @@ jobs:
       - name: Echo out Path
         run: echo $PATH
       # Create new drupal project with Composer install
-      - name: Install drupal
+      - name: Install Drupal with Composer
         run: composer update
       # Check for Drupal coding standards
       - name: Check for Drupal coding standards
         uses: guix77/phpcs-drupal-action@v1.0.0
       # Install Drupal for phpunit tests
-      - name: Install Drupal for phpunit testing
+      - name: Install Drupal site for phpunit testing
         run: |
-          $PROJECT_ROOT/vendor/bin/drush site-install standard --yes --account-pass=admin --db-url=$SIMPLETEST_DB
-          $PROJECT_ROOT/vendor/bin/drush config-set system.performance css.preprocess 0 --yes
-          $PROJECT_ROOT/vendor/bin/drush config-set system.performance js.preprocess 0 --yes
-          $PROJECT_ROOT/vendor/bin/drush config-set system.logging error_level all --yes
+          $(pwd)/vendor/bin/drush site-install standard --yes --account-pass=admin --db-url=$SIMPLETEST_DB
+          $(pwd)/vendor/bin/drush config-set system.performance css.preprocess 0 --yes
+          $(pwd)/vendor/bin/drush config-set system.performance js.preprocess 0 --yes
+          $(pwd)/vendor/bin/drush config-set system.logging error_level all --yes
       - name: Start HTTP server for testing
-        run:  $PROJECT_ROOT/vendor/bin/drush runserver --default-server=builtin 8888 > /dev/null &       
+        run:  $(pwd)/vendor/bin/drush runserver --default-server=builtin 8888 > /dev/null &       
       - name: Run PHPUnit Tests
         run: |
-          $PROJECT_ROOT/vendor/bin/drush en simpletest
-          $PROJECT_ROOT/vendor/bin/phpunit -c $DRUPAL_ROOT/core/phpunit.xml.dist --verbose --group=$MODULE $DRUPAL_ROOT/modules/contrib/$MODULE
-          $PROJECT_ROOT/vendor/bin/drush pm:uninstall simpletest -y
+          $(pwd)/vendor/bin/drush en simpletest
+          $(pwd)/vendor/bin/phpunit -c $(pwd)/docroot/core/phpunit.xml.dist --verbose --group=${{env.MODULE}} $(pwd)/docroot/modules/contrib/${{env.MODULE}}
+          $(pwd)/vendor/bin/drush pm:uninstall simpletest -y
