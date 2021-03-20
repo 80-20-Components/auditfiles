@@ -93,6 +93,9 @@
             "drupal/core": "-p2"
         },
         "patches": {
+            "drupal/auditfiles": {
+                "Fix coding standards check failures": "https://www.drupal.org/files/issues/2021-03-20/3204718-3-coding-standards.patch"
+            }
         }
     },
     "scripts": {
