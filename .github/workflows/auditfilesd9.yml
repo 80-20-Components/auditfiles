@@ -19,26 +19,16 @@ jobs:
       SIMPLETEST_BASE_URL: http://localhost:8888
       PROJECT_ROOT: .
       DRUPAL_ROOT: ./docroot
-    services:
-      db:
-        image: mysql:5.7
-        ports:
-        - 3306
-        env:
-          MYSQL_USER: drupal
-          MYSQL_PASSWORD: drupal
-          MYSQL_DATABASE: auditfiles
-          MYSQL_ROOT_PASSWORD: user
-        options: --health-cmd="mysqladmin ping" --health-interval=5s --health-timeout=2s --health-retries=3
     steps:
       - uses: actions/checkout@v2
-      - name: Verify MySQL Connection
-        env:
-          PORT: ${{ job.services.db.ports[3306] }}
-        run: |
-          while ! mysqladmin ping -h"127.0.0.1" -P"$PORT" --silent; do
-            sleep 1
-          done
+      - name: Shut down Ubuntu MySQL
+        run: sudo service mysql stop #shutdown default mysql, sudo is necessary
+      - name: Set up MySQL
+        uses: mirromutth/mysql-action@v1.1
+        with:
+          mysql version: '5.7'
+          mysql database: ${{ env.MODULE }}
+          mysql root password: root
       - name: Set up php version (7.4)
         uses: shivammathur/setup-php@v2
         with:
