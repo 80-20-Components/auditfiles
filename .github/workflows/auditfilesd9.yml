@@ -15,7 +15,7 @@ jobs:
       MODULE: auditfiles
       COMPOSER_MEMORY_LIMIT: -1
       # Note, the username, password, port and db match mysql service setup.
-      SIMPLETEST_DB: mysql://drupal:drupal@127.0.0.1:3306/auditfiles
+      SIMPLETEST_DB: mysql://root:root@127.0.0.1:3306/auditfiles
       SIMPLETEST_BASE_URL: http://localhost:8888
       PROJECT_ROOT: .
       DRUPAL_ROOT: ./docroot
@@ -46,17 +46,6 @@ jobs:
           # Use composer.json for key, if composer.lock is not committed
           key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.json') }}
           restore-keys: ${{ runner.os }}-composer-
-      - name: Check php version (7.4)
-        run: php --version
-      - name: set up chromedriver for headless chrome
-        uses: nanasess/setup-chromedriver@master
-      - name: Install latest Google Chrome
-        run: wget -q https://script.install.devinsideyou.com/google-chrome && chmod +x google-chrome
-      # Comes from Bolt project, may not be necessary
-      - name: Add chromedriver to PATH variable
-        run: export PATH="$(pwd)/vendor/bin:${PATH}"
-      - name: Echo out Path
-        run: echo $PATH
       # Create new drupal project with Composer install
       - name: Install Drupal with Composer
         run: composer update
@@ -66,6 +55,7 @@ jobs:
       # Install Drupal for phpunit tests
       - name: Install Drupal site for phpunit testing
         run: |
+          echo ${{ env.SIMPLETEST_DB }}
           $(pwd)/vendor/bin/drush site-install standard --yes --account-pass=admin --db-url=$SIMPLETEST_DB
           $(pwd)/vendor/bin/drush config-set system.performance css.preprocess 0 --yes
           $(pwd)/vendor/bin/drush config-set system.performance js.preprocess 0 --yes
